@@ -362,7 +362,7 @@ else
                     }
 
                     # Remove the session to allow connection to another computer in the list
-                    Remove-PSSession -Name $so
+                    Remove-PSSession -Session $so
                 }
 
                 catch
