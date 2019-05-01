@@ -64,7 +64,7 @@ else
 
         $ErrorActionPreference = 'SilentlyContinue'
 
-        if (-not $(Get-ADComputer -Identity "$comp" -ErrorAction stop)) 
+        if (-not $(Get-ADComputer -Identity "$comp")) 
         { 
             Write-Host -ForegroundColor YELLOW "`n$comp does not exist in AD" 
         }
