@@ -62,11 +62,11 @@ else
         $comp = $comp.Split('.')[0] # removes everything after the hostname.fqdn that comes with the wsus export
         $comp = $comp -replace '(^\s+|\s+$)','' -replace '\s+',' ' #removes any double spaces, tabs, single blank spaces on the line
 
-        $ErrorActionPreference = 'Stop' #'SilentlyContinue'
+        $ErrorActionPreference = 'SilentlyContinue'
 
-        if (-not $(Get-ADComputer -Identity "$comp")) 
+        if (-not $(Get-ADComputer -Identity "$comp" -ErrorAction stop)) 
         { 
-            Write-Host -ForegroundColor YELLOW "$comp does not exist in AD" 
+            Write-Host -ForegroundColor YELLOW "`n$comp does not exist in AD" 
         }
 
         else
@@ -149,7 +149,7 @@ else
                             Stop-Service -Name bits -Force -ErrorAction Stop
                             Stop-Service -Name msiserver -Force -ErrorAction Stop
                             
-                            Write-Host "`tstopped cryptsvc, bits, msiserver services"
+                            Write-Host "`tstopped cryptsvc, bits, msiserver services" $Error[0]
                         }
 
                         catch 
@@ -173,11 +173,23 @@ else
 
                         # 5 - Check and repair the registry keys, if necessary
 
+                        # Only uncomment this block for computers that have duplicate SusClientId's
+                        <#try 
+                        {
+                            Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate" -Name "SusClientId" -ErrorAction Stop
+                            Write-Host "`tdeleted the SusClientId reg item"
+                        }
+
+                        catch
+                        {
+                            Write-Host -ForegroundColor Red "`tFailed to delete the SusClientId reg key"
+                        }#>
+
                         $regValueShouldBe = 146432
 
                         $regPath1 = "Registry::HKU\S-1-5-18\Software\Microsoft\Windows\CurrentVersion\WinTrust\Trust Providers\Software Publishing"
                         $regPath2 = "Registry::HKU\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\WinTrust\Trust Providers\Software Publishing"
-                        $regPath3 = "Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\WinTrust\Trust Providers\Software Publishing"
+                        $regPath3 = "Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\WinTrust\Trust Providers\Software Publishing"                        
 
                         $regPaths = @($regPath1, $regPath2, $regPath3)
 
@@ -334,11 +346,12 @@ else
                         if ($osVersion -eq "Windows 10 Pro")
                         {
                             $getBuild = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name CurrentBuild).CurrentBuild + '.' + ((Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name UBR).UBR)
-                            
+                            Write-Host "`tbuild" $getBuild
+
                             if ($getBuild -ige 17763.0)
                             {
                                 . "C:\Windows\System32\UsoClient.exe" StartInteractiveScan
-                                Write-Output "`tstarting scan"
+                                Write-Output "`tstarting interactive scan"
                             }
 
                             else
@@ -363,6 +376,7 @@ else
 
                     # Remove the session to allow connection to another computer in the list
                     Remove-PSSession -Session $so
+                    Write-Output "`tClosing PSSession"
                 }
 
                 catch
