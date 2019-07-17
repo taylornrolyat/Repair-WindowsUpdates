@@ -2,7 +2,7 @@
 	.NOTES
 	===========================================================================
 	             Created on:   	05/14/2018
-                 Modified on:   02/19/2019
+                 Modified on:   07/17/2019
 	             Created by:   	Taylor Triggs
                  Notes:         Run as Admin
 	             Dependancies:  Powershell 5.0, RSAT
@@ -43,7 +43,7 @@
 Import-Module ActiveDirectory
 
 $computerslist = @()
-$obj = @()
+$resultsList = @() # computers that were fixed after runnning the script
 
 $scriptFolderRoot = Split-Path $MyInvocation.MyCommand.Path
 $fixList = "$scriptFolderRoot\list.csv"
@@ -60,13 +60,13 @@ else
     foreach ($comp in $computerslist)
     {   
         $comp = $comp.Split('.')[0] # removes everything after the hostname.fqdn that comes with the wsus export
-        $comp = $comp -replace '(^\s+|\s+$)','' -replace '\s+',' ' #removes any double spaces, tabs, single blank spaces on the line
+        $comp = $comp -replace '(^\s+|\s+$)','' -replace '\s+',' ' # removes any double spaces, tabs, single blank spaces on the line
 
         $ErrorActionPreference = 'SilentlyContinue'
 
         if (-not $(Get-ADComputer -Identity "$comp")) 
         { 
-            Write-Host -ForegroundColor YELLOW "`n$comp does not exist in AD" 
+            Write-Host -ForegroundColor YELLOW "`n$comp does not exist in AD"                        
         }
 
         else
@@ -89,6 +89,13 @@ else
                     catch
                     {
                         Write-Host -ForegroundColor Red "WinRM service could not start, moving on to next computer"
+
+                        $resultsList += New-Object psobject -Property @{
+                            ComputerName = $comp
+                            Status = "Failed"
+                            Details = "WinRM service could not start, moving on to next computer"
+                        }
+
                         Continue
                     }
                 }
@@ -101,11 +108,13 @@ else
                     Write-Host "connected"
 
                     # Invoke the commands to fix WSUS updates on the computer
-                    Invoke-Command -Session $so -ScriptBlock {
+                    $results = Invoke-Command -Session $so -ScriptBlock {
+                    
+                        $props = @{ComputerName=$env:COMPUTERNAME}                     
 
                         # 1 - Get verson of windows, 7 or 10
                         $osVersion = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name ProductName).ProductName
-                        Write-Output "`t$osVersion"
+                        Write-Host "`t$osVersion"
 
                         # 2 - If the windows update service is running, stop it
                         try 
@@ -120,25 +129,37 @@ else
                                 try 
                                 {
                                     Stop-Service -Name "Windows Update" -Force -ErrorAction Stop
-                                    Write-Output "`tstopped windows update service"
+                                    Write-Host "`tstopped windows update service"
                                 }
 
                                 catch
                                 {
                                     Write-Host -ForegroundColor Red "`tfailed to stop the windows update service"
+
+                                    $props.Add('Status', 'Failed')
+                                    $props.Add('Details', 'failed to stop the windows update service')
+
+                                    New-Object -Type PSObject -Property $props
+
                                     Continue
                                 }
                             }
 
                             else
                             {
-                                Write-Output "`twindows Update service was already stopped"
+                                Write-Host "`twindows Update service was already stopped"
                             }
                         }
 
                         catch 
                         {
                             Write-Host -ForegroundColor Red "`tfailed to get the Windows Update service status, moving to the next computer"
+
+                            $props.Add('Status', 'Failed')
+                            $props.Add('Details', 'failed to get the Windows Update service status')
+
+                            New-Object -Type PSObject -Property $props
+
                             Continue 
                         }
 
@@ -155,6 +176,12 @@ else
                         catch 
                         {
                             Write-Host -ForegroundColor Red "`tfailed to stop cryptsvc, bits or msiserver services"
+
+                            $props.Add('Status', 'Failed')
+                            $props.Add('Details', 'cryptsvc, bits or msiserver service failed to stop')
+
+                            New-Object -Type PSObject -Property $props
+
                             Continue
                         }
                     
@@ -162,18 +189,24 @@ else
                         try 
                         {
                             Remove-Item C:\Windows\SoftwareDistribution -Recurse -Force 
-                            Write-Output "`tdeleted softwaredistribution folder"
+                            Write-Host "`tdeleted softwaredistribution folder"
                         }
 
                         catch 
                         {
                             Write-Host -ForegroundColor Red "`tfailed to delete the software distribution folder"
+
+                            $props.Add('Status', 'Failed')
+                            $props.Add('Details', 'unable to delete the software distribution folder')
+
+                            New-Object -Type PSObject -Property $props
+
                             Continue
                         }
 
                         # 5 - Check and repair the registry keys, if necessary
 
-                        # Only uncomment this block for computers that have duplicate SusClientId's
+                        # Only uncomment this block if you know that computers that have duplicate SusClientId's
                         <#try 
                         {
                             Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate" -Name "SusClientId" -ErrorAction Stop
@@ -183,6 +216,13 @@ else
                         catch
                         {
                             Write-Host -ForegroundColor Red "`tFailed to delete the SusClientId reg key"
+
+                            $props.Add('Status', 'Failed')
+                            $props.Add('Details', 'unable to delete the SusClientID registry item')
+
+                            New-Object -Type PSObject -Property $props
+
+                            Continue
                         }#>
 
                         $regValueShouldBe = 146432
@@ -236,18 +276,25 @@ else
                                 try 
                                 { 
                                     Set-ItemProperty -Path $Path -Name $Name -Value $regValueShouldBe -Type DWORD -ErrorAction Stop
-                                    Write-Output "`treg value was corrected"
+                                    Write-Host "`treg value was corrected"
                                 }
 
                                 catch 
                                 {
                                     Write-Host -ForegroundColor Red "`tReg was not able to be corrected, please look at" $Path
+
+                                    $props.Add('Status', 'Failed')
+                                    $props.Add('Details', "registry was not able to be corrected, please look at $Path")
+
+                                    New-Object -Type PSObject -Property $props
+
+                                    Continue
                                 }
                             }
 
                             else 
                             {
-                                Write-Output "`treg value is good"
+                                Write-Host "`tregistry value is good"
                             }
                         }
 
@@ -267,12 +314,19 @@ else
                                 try 
                                 { 
                                     New-ItemProperty -Path $Path -Name "State" -Value $regValueShouldBe -Type DWORD -ErrorAction Stop
-                                    Write-Output "`tCreated the registry item State with value " $regValueShouldBe
+                                    Write-Host "`tCreated the registry item State with value " $regValueShouldBe
                                 }
 
                                 catch
                                 {
                                     Write-Host -ForegroundColor Red "`tFailed to create missing registry item, please investigate"
+
+                                    $props.Add('Status', 'Failed')
+                                    $props.Add('Details', "missing registry item failed was not able to be created")
+
+                                    New-Object -Type PSObject -Property $props
+
+                                    Continue
                                 }
                             }
                         }
@@ -291,14 +345,27 @@ else
 
                                 catch
                                 {
-                                    Write-Host -ForegroundColor Red "`tFailed to set the service to manual"
+                                    Write-Host -ForegroundColor Red "`tFailed to set the service to Manual start up"
+
+                                    $props.Add('Status', 'Failed')
+                                    $props.Add('Details', "unable to set the Windows Update service to Manual start type")
+
+                                    New-Object -Type PSObject -Property $props
+
+                                    Continue
                                 }
                             }
                         }
 
                         catch
                         {
-                            Write-Output "`tFailed to get the Windows Update service start-up status, moving to the next computer"
+                            Write-Host "`tFailed to get the Windows Update service start-up status, moving to the next computer"
+
+                            $props.Add('Status', 'Failed')
+                            $props.Add('Details', 'cannot lookup the Windows Update service start-up status')
+
+                            New-Object -Type PSObject -Property $props
+
                             Continue
                         }
 
@@ -311,19 +378,32 @@ else
                                 try 
                                 {
                                     Start-Service -Name "Windows Update" -ErrorAction Stop
-                                    Write-Output "`tstarting windows update service"
+                                    Write-Host "`tstarting windows update service"
                                 }
 
                                 catch
                                 {
                                     Write-Host -ForegroundColor Red "`tFailed to start the service"
+
+                                    $props.Add('Status', 'Failed')
+                                    $props.Add('Details', "unable to start the Windows Update service")
+
+                                    New-Object -Type PSObject -Property $props
+
+                                    Continue
                                 }
                             }
                         }
 
                         catch 
                         {
-                            Write-Output "`tFailed to get the Windows Update service status, moving to the next computer"
+                            Write-Host "`tFailed to get the Windows Update service status, moving to the next computer"
+
+                            $props.Add('Status', 'Failed')
+                            $props.Add('Details', 'cannot lookup the Windows Update service service status')
+
+                            New-Object -Type PSObject -Property $props
+
                             Continue 
                         }
 
@@ -333,14 +413,22 @@ else
                             Start-Service -Name cryptSVc -ErrorAction Stop
                             Start-Service -Name bits -ErrorAction Stop
                             Start-Service -Name msiserver -ErrorAction Stop
-                            Write-Output "`tstarting dependency windows update services"
+                            Write-Host "`tstarting dependency windows update services"
                         }
 
                         catch 
                         {
-                            Write-Host -ForegroundColor Red "`tFailed to start Windows services, moving on to next computer but please investigate"
+                            Write-Host -ForegroundColor Red "`tFailed to start dependency Windows services, moving on to next computer but please investigate"
+
+                            $props.Add('Status', 'Failed')
+                            $props.Add('Details', 'cannot start the dependency Windows Update services')
+
+                            New-Object -Type PSObject -Property $props
+
                             Continue 
                         }
+
+                        sleep 10
 
                         # 8 - For win 7, start wuauclt.exe /detectnow, for win 10, start usoclient.exe startscan
                         if ($osVersion -eq "Windows 10 Pro")
@@ -348,50 +436,103 @@ else
                             $getBuild = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name CurrentBuild).CurrentBuild + '.' + ((Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name UBR).UBR)
                             Write-Host "`tbuild" $getBuild
 
+                            # Windows 10 1809 for some reason only works with StartInteractiveScan
                             if ($getBuild -ige 17763.0)
                             {
-                                . "C:\Windows\System32\UsoClient.exe" StartInteractiveScan
-                                Write-Output "`tstarting interactive scan"
+                                #. "C:\Windows\System32\UsoClient.exe" StartInteractiveScan
+                                Start-Process "C:\Windows\System32\UsoClient.exe" -ArgumentList "StartInteractiveScan" -Wait
+                                Write-Host "`tstarting interactive scan"
+
+                                $props.Add('Status', 'Successful')
+                                $props.Add('Details', 'updates were repaired')
                             }
 
+                            # Windows 10 less than 1809 for some reason only works with StartScan
                             else
                             {    
-                                . "C:\Windows\System32\UsoClient.exe" StartScan
-                                Write-Output "`tstarting scan"
+                                #. "C:\Windows\System32\UsoClient.exe" StartScan
+                                Start-Process "C:\Windows\System32\UsoClient.exe" -ArgumentList "StartScan" -Wait
+                                Write-Host "`tstarting scan"
+                                                                
+                                $props.Add('Status', 'Successful')
+                                $props.Add('Details', 'updates were repaired')
                             }
                         }
 
                         elseif ($osVersion -eq "Windows 7 Professional")
                         {
-                            Write-Output "`tstarting scan"
-                            . "C:\Windows\System32\Wuauclt.exe" /detectnow
+                            #. "C:\Windows\System32\Wuauclt.exe" /detectnow
+                            Start-Process "C:\Windows\System32\Wuauclt.exe" -ArgumentList "/detectnow" -Wait
+                            Write-Host "`tstarting scan"
+                                                        
+                            $props.Add('Status', 'Successful')
+                            $props.Add('Details', 'updates were repaired')
                         }
 
                         else 
                         {
-                            Write-Output "`tOS is not supported"
+                            Write-Host "`tOS is not supported"
+
+                            $props.Add('Status', 'Failed')
+                            $props.Add('Details', 'this OS is not supported')
                         }
 
+                        New-Object -Type PSObject -Property $props
+                    }                    
+
+                    $resultsList += New-Object psobject -Property @{
+                        ComputerName = $results.ComputerName
+                        Status = $results.Status
+                        Details = $results.Details
                     }
 
                     # Remove the session to allow connection to another computer in the list
                     Remove-PSSession -Session $so
-                    Write-Output "`tClosing PSSession"
+                    Write-Host "`tClosing PSSession"
                 }
 
                 catch
                 {
                     Write-Host -ForegroundColor Red "Failed to connect"
+
+                    $resultsList += New-Object psobject -Property @{
+                        ComputerName = $comp
+                        Status = 'Failed'
+                        Details = 'unable to connect, check your credentials'
+                    }
                 }
             } 
 
             else 
             { 
                 Write-Host "`n"
-                Write-Host -ForegroundColor Yellow $comp "is offline" 
+                Write-Host $comp "is offline"
+
+                $resultsList += New-Object psobject -Property @{
+                    ComputerName = $comp
+                    Status = 'Offline'
+                    Details = ''
+                }
             }
         } 
         
         $ErrorActionPreference = 'Continue'
     }
+}
+
+Write-Host -ForegroundColor Green "`n---- Detailed Repair Results ----"
+$resultsList | Format-Table ComputerName, Status, Details | Sort-Object Status, ComputerName
+
+$offlineList = $resultsList | Where-Object Status -like "Offline" | Format-Table ComputerName
+if ($offlineList)
+{
+    Write-Host -ForegroundColor Yellow "`n---- Offline Computers ----"
+    $offlineList
+}
+
+$failedList = $resultsList | Where-Object Status -like "Failed" | Format-Table ComputerName
+if ($failedList)
+{
+    Write-Host -ForegroundColor Red "`n---- Failed Computers ----"
+    $failedList
 }
