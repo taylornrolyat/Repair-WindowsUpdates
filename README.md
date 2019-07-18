@@ -7,9 +7,10 @@ Troubleshooting failed Windows updates and WSUS reporting issues on client manch
 2. Stops the Windows Update service as well as cryptsvc, bits, msiserver
 3. Deletes C:\Windows\SoftwareDistribution
 4. Checks and repairs certain registry keys if they are incorrect (I have seen these changed before and caused all patches to fail to install)
-5. Start the Windows Update service as well as cryptsvc, bits, msiserver
-6. Detects if the system is Windows 7 or Windows 10 and initiates a scan with WSUS 
-7. A report table is generated at the end of the scipt that provides detailed repair results
+5. Make sure the start type for the windows services are correct and functional
+6. Start the Windows Update service as well as cryptsvc, bits, msiserver
+7. Detects if the system is Windows 7 or Windows 10 and initiates a scan with WSUS 
+8. A report table is generated at the end of the scipt that provides detailed repair results
 
 ## Requirements:
 Machines must be configured to use WSUS and have PowerShell remoting enabled. 
